@@ -4,13 +4,14 @@ import os
 import requests
 import websockets
 from typing import List
+from datetime import datetime
 from dotenv import load_dotenv
 
 # =====================================================
 # LOAD ENV
 # =====================================================
 
-load_dotenv()  # carrega o arquivo .env
+load_dotenv()
 
 # =====================================================
 # CONFIGURAÇÕES
@@ -21,7 +22,7 @@ RPC_WS   = "wss://api.mainnet-beta.solana.com"
 
 TARGET_WALLETS: List[str] = [
     "9wXNBdnGWHHLnzntZVGTU7t1HZMGHiGNZWnrknreueqr",
-    "6sjpfFfs28qi5xHi1KVVbwgexGJE4RZvToXPyANeHWKE",
+    "HfrBNatNwzSNxhW6yPNsiLitDzgsHw6y2s8o7bJXAYf6",
 ]
 
 # =====================================================
@@ -47,6 +48,25 @@ def send_telegram(message: str):
         },
         timeout=10
     )
+
+# =====================================================
+# STARTUP MESSAGE
+# =====================================================
+
+def send_startup_message():
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    wallets_text = "\n".join([f"• `{w}`" for w in TARGET_WALLETS])
+
+    message = (
+        "🟢 *Solana DeFi Monitor iniciado*\n\n"
+        f"⏱ *Horário:* {now}\n\n"
+        "👛 *Carteiras monitoradas:*\n"
+        f"{wallets_text}\n\n"
+        "_Bot está online e aguardando swaps..._"
+    )
+
+    send_telegram(message)
 
 # =====================================================
 # PREÇO SOL (USD)
@@ -175,6 +195,7 @@ async def listen_wallet(wallet: str):
 # =====================================================
 
 async def main():
+    send_startup_message()  # 👈 mensagem enviada AO INICIAR
     await asyncio.gather(*(listen_wallet(w) for w in TARGET_WALLETS))
 
 if __name__ == "__main__":

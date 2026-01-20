@@ -14,6 +14,7 @@ RPC_WS   = "wss://api.mainnet-beta.solana.com"
 
 TARGET_WALLETS: List[str] = [
     "9wXNBdnGWHHLnzntZVGTU7t1HZMGHiGNZWnrknreueqr",
+    "6sjpfFfs28qi5xHi1KVVbwgexGJE4RZvToXPyANeHWKE",
 ]
 
 # =====================================================

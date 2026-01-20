@@ -4,6 +4,13 @@ import os
 import requests
 import websockets
 from typing import List
+from dotenv import load_dotenv
+
+# =====================================================
+# LOAD ENV
+# =====================================================
+
+load_dotenv()  # carrega o arquivo .env
 
 # =====================================================
 # CONFIGURAÇÕES
@@ -18,23 +25,23 @@ TARGET_WALLETS: List[str] = [
 ]
 
 # =====================================================
-# TELEGRAM (SECRETS)
+# TELEGRAM
 # =====================================================
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
 
 if not BOT_TOKEN or not CHAT_ID:
-    raise RuntimeError("Secrets do Telegram não configurados")
+    raise RuntimeError("❌ Variáveis TELEGRAM_BOT_TOKEN ou TELEGRAM_CHAT_ID não encontradas no .env")
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-def send_telegram(msg: str):
+def send_telegram(message: str):
     requests.post(
         TELEGRAM_URL,
         json={
             "chat_id": CHAT_ID,
-            "text": msg,
+            "text": message,
             "parse_mode": "Markdown",
             "disable_web_page_preview": True,
         },
@@ -42,7 +49,7 @@ def send_telegram(msg: str):
     )
 
 # =====================================================
-# PREÇO SOL
+# PREÇO SOL (USD)
 # =====================================================
 
 def get_sol_price_usd():
@@ -57,7 +64,7 @@ def get_sol_price_usd():
         return None
 
 # =====================================================
-# RPC
+# RPC HELPERS
 # =====================================================
 
 def rpc_post(method: str, params: list):
@@ -73,7 +80,7 @@ def fetch_transaction(signature: str):
     )
 
 # =====================================================
-# DETECTOR DE SWAP
+# SWAP DETECTION
 # =====================================================
 
 def detect_swap(tx: dict, wallet: str):
@@ -115,7 +122,7 @@ def detect_swap(tx: dict, wallet: str):
     }
 
 # =====================================================
-# WEBSOCKET
+# WEBSOCKET LISTENER
 # =====================================================
 
 async def listen_wallet(wallet: str):
@@ -127,7 +134,7 @@ async def listen_wallet(wallet: str):
             "params": [{"mentions": [wallet]}, {"commitment": "confirmed"}],
         }))
 
-        print("🔍 Monitorando:", wallet)
+        print("🔍 Monitorando carteira:", wallet)
 
         while True:
             msg = json.loads(await ws.recv())

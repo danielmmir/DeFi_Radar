@@ -15,10 +15,7 @@ HELIUS_API_KEY = os.getenv("HELIUS_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-WALLETS = [
-    "HfrBNatNwzSNxhW6yPNsiLitDzgsHw6y2s8o7bJXAYf6",
-    "9wXNBdnGWHHLnzntZVGTU7t1HZMGHiGNZWnrknreueqr",
-]
+WALLETS = [w.strip() for w in os.getenv("WALLETS").split(",")]
 
 CHECK_INTERVAL = 120  # segundos
 TX_LIMIT = 5          # ECONÔMICO

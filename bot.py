@@ -2,159 +2,174 @@ import os
 import time
 import requests
 from datetime import datetime
-import pytz
 from dotenv import load_dotenv
+import pytz
 
-# =========================
-# ENV / CONFIG
-# =========================
+# =====================================================
+# CONFIG
+# =====================================================
+
 load_dotenv()
 
 HELIUS_API_KEY = os.getenv("HELIUS_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-WALLETS = [w.strip() for w in os.getenv("WALLETS").split(",")]
+WALLETS = [
+    "HfrBNatNwzSNxhW6yPNsiLitDzgsHw6y2s8o7bJXAYf6",
+    "9wXNBdnGWHHLnzntZVGTU7t1HZMGHiGNZWnrknreueqr",
+]
 
-CHECK_INTERVAL = 30  # segundos
-SOL_MINT = "So11111111111111111111111111111111111111112"
+CHECK_INTERVAL = 120  # segundos
+TX_LIMIT = 5          # ECONÔMICO
+BACKOFF_TIME = 600    # 10 min se estourar limite
 
-SP_TZ = pytz.timezone("America/Sao_Paulo")
+BRT = pytz.timezone("America/Sao_Paulo")
 
-SEEN_SIGNATURES = set()
+HELIUS_URL = "https://api.helius.xyz/v0/addresses/{wallet}/transactions"
 
-# =========================
-# TELEGRAM
-# =========================
-def send_telegram(msg):
+# =====================================================
+# UTILS
+# =====================================================
+
+def now_brt():
+    return datetime.now(BRT).strftime("%d/%m %H:%M:%S")
+
+def send_telegram(msg: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": msg,
-        "parse_mode": "HTML"
+        "parse_mode": "Markdown"
     }
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print("Erro Telegram:", e)
+    requests.post(url, json=payload, timeout=10)
 
-# =========================
-# HELIUS
-# =========================
-def fetch_transactions(wallet, limit=20):
-    url = f"https://api.helius.xyz/v0/addresses/{wallet}/transactions"
+def get_sol_price():
+    try:
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": "solana", "vs_currencies": "usd"},
+            timeout=10
+        )
+        return r.json()["solana"]["usd"]
+    except:
+        return None
+
+# =====================================================
+# CORE
+# =====================================================
+
+def fetch_transactions(wallet, before=None):
     params = {
         "api-key": HELIUS_API_KEY,
-        "limit": limit
+        "limit": TX_LIMIT
     }
-    r = requests.get(url, params=params, timeout=20)
-    if r.status_code != 200:
-        print("Erro Helius:", r.text)
-        return []
+    if before:
+        params["before"] = before
+
+    r = requests.get(HELIUS_URL.format(wallet=wallet), params=params, timeout=20)
+
+    if r.status_code == 429 or "max usage" in r.text.lower():
+        raise RuntimeError("RATE_LIMIT")
+
+    r.raise_for_status()
     return r.json()
 
-# =========================
-# PARSER DE TRADE (DEX-AGNOSTIC)
-# =========================
-def parse_trade(tx, wallet):
-    sol_change = tx.get("nativeBalanceChange", 0)
-    token_changes = tx.get("tokenBalanceChanges", [])
-
-    if sol_change == 0 or not token_changes:
+def parse_swap(tx):
+    if tx.get("type") != "SWAP":
         return None
 
-    token = None
-    token_amount = 0
+    source = tx.get("source", "").upper()
+    transfers = tx.get("tokenTransfers", [])
 
-    for t in token_changes:
-        if t.get("userAccount") != wallet:
-            continue
+    sol_in = 0
+    sol_out = 0
+    token_in = None
+    token_out = None
 
+    for t in transfers:
         mint = t.get("mint")
-        if mint == SOL_MINT:
-            continue
+        amount = t.get("tokenAmount", 0)
 
-        token = t.get("symbol") or mint[:6]
-        token_amount = abs(t.get("amount", 0))
-        break
+        if mint == "So11111111111111111111111111111111111111112":
+            if t.get("toUserAccount"):
+                sol_out += amount
+            else:
+                sol_in += amount
+        else:
+            if not token_in:
+                token_in = mint
+            else:
+                token_out = mint
 
-    if not token:
-        return None
-
-    trade_type = "BUY" if sol_change < 0 else "SELL"
+    sol_amount = max(sol_in, sol_out)
 
     return {
-        "type": trade_type,
-        "token": token,
-        "token_amount": token_amount,
-        "sol_amount": abs(sol_change),
+        "dex": source,
+        "sol": sol_amount,
+        "token_in": token_in,
+        "token_out": token_out,
         "signature": tx.get("signature"),
-        "timestamp": tx.get("timestamp"),
-        "source": tx.get("source", "UNKNOWN")
+        "timestamp": tx.get("timestamp")
     }
 
-# =========================
-# FORMATADOR
-# =========================
-def format_message(trade, wallet):
-    ts = datetime.fromtimestamp(trade["timestamp"], SP_TZ).strftime("%d/%m %H:%M:%S")
+# =====================================================
+# MAIN LOOP
+# =====================================================
 
-    return (
-        "🔥 <b>Novo trade detectado</b>\n\n"
-        f"📍 <b>Carteira:</b>\n<code>{wallet}</code>\n\n"
-        f"🔄 <b>Tipo:</b> {trade['type']}\n"
-        f"🪙 <b>Token:</b> {trade['token']}\n"
-        f"💰 <b>SOL:</b> {trade['sol_amount']:.4f}\n"
-        f"📊 <b>Quantidade:</b> {trade['token_amount']:.4f}\n\n"
-        f"🧩 <b>Fonte:</b> {trade['source']}\n"
-        f"🕒 <b>Horário:</b> {ts}"
-    )
-
-# =========================
-# STARTUP MESSAGE
-# =========================
-def send_startup_message():
-    now = datetime.now(SP_TZ).strftime("%d/%m %H:%M:%S")
-    wallets_text = "\n".join([f"• <code>{w}</code>" for w in WALLETS])
-
-    msg = (
-        "✅ <b>Solana Monitor DEFI iniciado</b>\n\n"
-        f"🕒 <b>Horário:</b> {now}\n\n"
-        "🪙 <b>Carteiras monitoradas:</b>\n"
-        f"{wallets_text}"
-    )
-    send_telegram(msg)
-
-# =========================
-# LOOP PRINCIPAL
-# =========================
 def main():
-    send_startup_message()
+    last_signature = {w: None for w in WALLETS}
+
+    send_telegram(
+        f"🟢 *Bot iniciado*\n"
+        f"🕒 {now_brt()}\n"
+        f"📡 Monitorando {len(WALLETS)} carteira(s)"
+    )
 
     while True:
-        try:
-            for wallet in WALLETS:
-                txs = fetch_transactions(wallet)
+        sol_price = get_sol_price()
 
-                for tx in txs:
-                    sig = tx.get("signature")
-                    if not sig or sig in SEEN_SIGNATURES:
+        for wallet in WALLETS:
+            try:
+                txs = fetch_transactions(wallet, last_signature[wallet])
+
+                if not txs:
+                    continue
+
+                for tx in reversed(txs):
+                    last_signature[wallet] = tx["signature"]
+
+                    swap = parse_swap(tx)
+                    if not swap:
                         continue
 
-                    trade = parse_trade(tx, wallet)
-                    if trade:
-                        send_telegram(format_message(trade, wallet))
+                    usd = (
+                        f"${swap['sol'] * sol_price:.2f}"
+                        if sol_price else "N/A"
+                    )
 
-                    SEEN_SIGNATURES.add(sig)
+                    msg = (
+                        f"🔄 *Novo Swap*\n"
+                        f"DEX: `{swap['dex']}`\n"
+                        f"SOL: `{swap['sol']:.4f}` (~{usd})\n"
+                        f"🕒 {now_brt()}\n"
+                        f"[Solscan](https://solscan.io/tx/{swap['signature']})"
+                    )
 
-            time.sleep(CHECK_INTERVAL)
+                    send_telegram(msg)
 
-        except Exception as e:
-            print("Erro loop principal:", e)
-            time.sleep(10)
+            except RuntimeError:
+                send_telegram("⚠️ *Rate limit atingido*. Entrando em backoff.")
+                time.sleep(BACKOFF_TIME)
 
-# =========================
-# ENTRYPOINT
-# =========================
+            except Exception as e:
+                send_telegram(f"❌ Erro: `{str(e)}`")
+
+        time.sleep(CHECK_INTERVAL)
+
+# =====================================================
+# ENTRY
+# =====================================================
+
 if __name__ == "__main__":
     main()
